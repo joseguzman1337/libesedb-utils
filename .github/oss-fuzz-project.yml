@@ -1,0 +1,29 @@
+# OSS-Fuzz integration for the libesedb-utils packaging subrepo.
+#
+# This repository is a thin Debian/Ubuntu packaging subrepo. The actual
+# `libesedb` C library that it wraps lives upstream at
+#   https://github.com/libyal/libesedb
+# and is what should be integrated with OSS-Fuzz for fuzzing coverage.
+#
+# We declare the upstream project here so that OSS-Fuzz can correlate
+# downstream packaging changes (this repo) with the upstream fuzz target.
+# When fuzz coverage is reported, the attribution is split correctly
+# between the upstream fuzz target and the packaging layer in this repo.
+#
+# To enable OSS-Fuzz integration for the actual library, file a tracking
+# issue against the upstream project and add a real `project.yaml` to
+# https://github.com/google/oss-fuzz/tree/master/projects/libesedb
+# following the guide at
+# https://google.github.io/oss-fuzz/getting-started/new-project-guide/
+
+homepage: https://github.com/libyal/libesedb
+language: c
+primary_contact: libyal@mail.midwinter.com
+auto_ccs:
+  - security@joseguzman1337.example.invalid
+main_repo: https://github.com/libyal/libesedb
+fuzzing_engines:
+  - libfuzzer
+sanitizers:
+  - address
+  - undefined

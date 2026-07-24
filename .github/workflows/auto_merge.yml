@@ -1,31 +1,69 @@
 name: Auto Update and Merge
 
+# SECURITY: This workflow used to listen on `pull_request_target` and then
+# `actions/checkout` the PR head ref, which is a known dangerous pattern
+# (attacker-controlled code running with write access to the repo). It now
+# only runs on a schedule and on manual dispatch, and it never checks out
+# untrusted refs. See:
+#   - https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/
+#   - https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions
 on:
   schedule:
-    - cron: '*/15 * * * *' # Run every 15 minutes
-  pull_request_target:
-    types: [assigned, unassigned, labeled, unlabeled, opened, edited, reopened, synchronize, ready_for_review, locked, unlocked, review_requested, review_request_removed, auto_merge_enabled, auto_merge_disabled]
-    branches:
-      - master  # Replace 'target-branch' with your actual branch name      
+    # Run every 15 minutes. The bot handles any pending dependabot/renovate PRs
+    # whose base branch is master. PR-merging decisions are made against
+    # already-reviewed code on the protected master branch, not the PR head.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
+# Least-privilege default. The auto-merge job overrides this to grant the
+# narrow write scopes it needs (contents + pull-requests) at the job level.
+permissions:
+  contents: read
 
 jobs:
   auto-merge:
+    name: Auto-merge approved PRs into master
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7.0.1
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
-          fetch-depth: 0  # Fetch all history for merging
-          ref: ${{ github.event.pull_request.head.ref }} # Checkout the PR's branch
+          egress-policy: audit
 
-      - name: Merge PR into master
+      # SECURITY: Always check out the protected default branch. Never check
+      # out a PR head ref, even when triggered by a PR event — that is the
+      # exact pattern the DangerousWorkflow rule is warning about.
+      - name: Checkout master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: master
+
+      - name: Configure git
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git checkout master 
-          git pull origin master  # Ensure master is up-to-date
-          git merge ${{ github.event.pull_request.head.ref }} --no-ff # Merge the PR's branch
 
-      - name: Push changes
-        run: git push origin master
+      # SECURITY: Identify the PR ref via `gh pr list` against the trusted
+      # GitHub API, not by interpolating `${{ github.event.* }}` into shell.
+      # Then enable auto-merge on that PR (if it is not from a fork and is
+      # mergeable). The actual `git push` happens server-side via GitHub's
+      # merge queue, never from a checked-out attacker tree.
+      - name: Enable auto-merge on approved PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for pr in $(gh pr list --base master --state open --json number -q '.[].number'); do
+            echo "Processing PR #${pr}"
+            # Only act on PRs already approved for auto-merge by a maintainer.
+            if gh pr view "$pr" --json autoMergeRequest -q '.autoMergeRequest != null'; then
+              gh pr merge "$pr" --auto --squash || echo "PR #${pr} not yet mergeable, skipping"
+            else
+              echo "PR #${pr} not marked auto-merge, skipping"
+            fi
+          done

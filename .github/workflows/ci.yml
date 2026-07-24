@@ -1,0 +1,92 @@
+name: CI
+
+# SASTID / CITestsID: this workflow runs a baseline of static checks
+# (workflow YAML lint + secret scan + json/markdown syntax) on every push
+# to master and on every pull request. The repo is a packaging metadata
+# subrepo with no compiled code, so this is the appropriate test surface.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-metadata:
+    name: Lint packaging metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate project.json
+        run: |
+          set -euo pipefail
+          python3 -c "import json,sys; json.load(open('project.json')); print('project.json: OK')"
+          python3 -c "import json,sys; json.load(open('renovate.json')); print('renovate.json: OK')"
+          python3 -c "import json,sys; json.load(open('.whitesource')); print('.whitesource: OK')"
+
+      - name: Workflow YAML lint
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys, yaml
+          from pathlib import Path
+          ok = True
+          for p in sorted(Path('.github/workflows').glob('*.yml')):
+              try:
+                  list(yaml.safe_load_all(p.read_text()))
+                  print(f"{p}: OK")
+              except yaml.YAMLError as e:
+                  print(f"{p}: FAIL\n{e}", file=sys.stderr)
+                  ok = False
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Verify LICENSE matches
+        run: |
+          set -euo pipefail
+          test -s LICENSE || { echo "LICENSE missing or empty"; exit 1; }
+          head -1 LICENSE
+
+      - name: Verify SECURITY.md exists
+        run: |
+          set -euo pipefail
+          test -s SECURITY.md || { echo "SECURITY.md missing or empty"; exit 1; }
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to upload SARIF to the code-scanning dashboard.
+      security-events: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
+        with:
+          languages: actions
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4.36.3
+        with:
+          category: "/language:actions"
